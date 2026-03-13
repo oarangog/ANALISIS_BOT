@@ -83,6 +83,8 @@ class TradeRequest(BaseModel):
     type: str  # BUY or SELL
     volume: float
     amount: float = 10.0
+    sl: float = 0.0
+    tp: float = 0.0
 
 @app.post("/auto-toggle")
 async def toggle_auto(request: AutoToggle):
@@ -135,7 +137,9 @@ async def get_daily_analysis():
                             symbol=asset, 
                             type=signal_data['signal'], 
                             volume=0.01, 
-                            amount=CURRENT_COMPOUND_AMOUNT
+                            amount=CURRENT_COMPOUND_AMOUNT,
+                            sl=signal_data['sl'],
+                            tp=signal_data['tp']
                         ))
                     else:
                         print(f"⏳ [SESSION-WAIT] Confianza 92%+ en {asset} pero fuera de horario NYSE: {session_msg}")
@@ -183,16 +187,14 @@ async def execute_trade(request: TradeRequest):
         raise HTTPException(status_code=500, detail="No se pudo conectar a MetaTrader 5")
     
     # EXECUTE TRADE IN MT5
-    # For binary-like simulation in MT5, we use standard lot sizes (0.01) or as requested
     ticket, new_balance, last_profit = bridge.execute_trade(
         request.symbol, 
         request.type, 
         request.volume,
-        sl=0.0, # Adjust if you want hard SL/TP in MT5
-        tp=0.0
+        sl=request.sl,
+        tp=request.tp
     )
     new_balance = bridge.get_balance()
-    ticket = result.get("order_id", "N/A")
     global LAST_TICKET
     LAST_TICKET = str(ticket)
     
