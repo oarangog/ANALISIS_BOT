@@ -3,6 +3,9 @@ import numpy as np
 from datetime import datetime, timedelta
 import os
 import sys
+
+class AnalysisEngine:
+    def __init__(self, data):
         """
         data: pandas DataFrame with 'Close', 'High', 'Low' columns
         """
