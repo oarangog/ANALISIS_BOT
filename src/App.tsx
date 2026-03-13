@@ -73,7 +73,12 @@ function App() {
             </button>
             <div className="auto-controls">
               <label>Base $: </label>
-              <input type="number" id="base-amount" defaultValue="10" className="base-input" />
+              <input
+                type="number"
+                id="base-amount"
+                defaultValue={marketData.auto_trading?.base_amount || 10}
+                className="base-input"
+              />
             </div>
             {marketData.auto_trading?.enabled && (
               <div className="streak-info">

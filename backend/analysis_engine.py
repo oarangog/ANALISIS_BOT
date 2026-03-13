@@ -89,7 +89,7 @@ class AnalysisEngine:
         # Strategy: Indicators + FVG Confirmation
         last_fvg = fvgs[-1] if fvgs else None
         
-        if close > sma20 and ema9 > sma20:
+        if signal == "BUY":
             confidence = 0.85
             signal = "BUY"
             if trend_bias == "BULLISH":
@@ -99,7 +99,7 @@ class AnalysisEngine:
             if last_fvg and last_fvg['type'] == 'BULLISH':
                 confidence += 0.05  # Higher weight for ICT
                 extra_reason += " + FVG Institutional"
-        elif close < sma20 and ema9 < sma20:
+        elif signal == "SELL":
             confidence = 0.85
             signal = "SELL"
             if trend_bias == "BEARISH":
@@ -109,6 +109,21 @@ class AnalysisEngine:
             if last_fvg and last_fvg['type'] == 'BEARISH':
                 confidence += 0.05 # Higher weight for ICT
                 extra_reason += " + FVG Institutional"
+
+        # APPLY SELF-LEARNING (Dynamic Weighting)
+        try:
+            from learning_brain import LearningBrain
+            brain = LearningBrain()
+            learned_multiplier = brain.get_experience_multiplier("GENERAL") # For now global, can be per asset
+            confidence *= learned_multiplier
+            if learned_multiplier > 1.0:
+                extra_reason += f" [IA EXPERTA: +{int((learned_multiplier-1)*100)}%]"
+            elif learned_multiplier < 1.0:
+                extra_reason += f" [IA CAUTELOSA: -{int((1-learned_multiplier)*100)}%]"
+        except:
+            pass
+
+        confidence = min(0.99, confidence) # Cap at 99%
 
         # Fix SL/TP calculation (Avoid 0.0)
         if signal == "BUY":

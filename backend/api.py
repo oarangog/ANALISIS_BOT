@@ -4,12 +4,14 @@ from pydantic import BaseModel
 from analysis_engine import AnalysisEngine
 from mt4_bridge import MT4Bridge
 from telegram_service import TelegramService
+from learning_brain import LearningBrain
 import pandas as pd
 import uvicorn
 
 app = FastAPI()
 telegram = TelegramService()
 bridge = MT4Bridge()
+brain = LearningBrain()
 
 import json
 import pytz
@@ -161,6 +163,7 @@ async def get_daily_analysis():
         },
         "auto_trading": {
             "enabled": AUTO_TRADING_ENABLED,
+            "base_amount": INVESTMENT_AMOUNT,
             "current_amount": CURRENT_COMPOUND_AMOUNT,
             "last_outcome": LAST_OUTCOME
         }
@@ -179,17 +182,15 @@ async def execute_trade(request: TradeRequest):
     if not bridge.connect():
         raise HTTPException(status_code=500, detail="No se pudo conectar a MetaTrader 5")
     
-    # Execute REAL Trade in MT5
+    # EXECUTE TRADE IN MT5
     # For binary-like simulation in MT5, we use standard lot sizes (0.01) or as requested
-    result = bridge.execute_trade(
+    ticket, new_balance, last_profit = bridge.execute_trade(
         request.symbol, 
         request.type, 
         request.volume,
         sl=0.0, # Adjust if you want hard SL/TP in MT5
         tp=0.0
     )
-    
-    # Report actual result from MT5
     new_balance = bridge.get_balance()
     ticket = result.get("order_id", "N/A")
     global LAST_TICKET
@@ -212,6 +213,10 @@ async def execute_trade(request: TradeRequest):
     else:
         # If no result yet, keep current amount or assume break even
         LAST_OUTCOME = "WAITING_RESULT"
+
+    # UPDATE BRAIN WITH OUTCOME
+    if ticket != "N/A" and LAST_OUTCOME in ["WIN", "LOSS"]:
+        brain.update_trade_outcome(ticket, LAST_OUTCOME)
 
     print(f"\n🚀 [MT5 REAL EXECUTION] TICKET: {ticket}")
     print(f"🏦 Activo: {request.symbol} | Volumen: {request.volume} | Tipo: {request.type}")
