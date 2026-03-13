@@ -1,9 +1,8 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-
-class AnalysisEngine:
-    def __init__(self, data):
+import os
+import sys
         """
         data: pandas DataFrame with 'Close', 'High', 'Low' columns
         """
@@ -89,27 +88,75 @@ class AnalysisEngine:
         # Strategy: Indicators + FVG Confirmation
         last_fvg = fvgs[-1] if fvgs else None
         
+        # Initialize extra reason parts
+        extra_reason_parts = []
+        
+        # ADVANCED SMC & CANDLESTICK INTEGRATION
+        candlestick_boost = 0.0
+        try:
+            from advanced_smc_detector import AdvancedSMCDector
+            smc = AdvancedSMCDector(self.df)
+            patterns = smc.detect_candlestick_patterns()
+            sweep = smc.detect_liquidity_sweeps()
+            ob = smc.detect_return_zones()
+            
+            for pat in patterns:
+                extra_reason_parts.append(f"Vela: {pat['desc']}")
+                
+                # Directional boosts based on pattern
+                if signal == "BUY" and pat['pattern'] in ['BULLISH_ENGULFING', 'HAMMER']:
+                    candlestick_boost += 0.05
+                elif signal == "SELL" and pat['pattern'] in ['BEARISH_ENGULFING', 'SHOOTING_STAR']:
+                    candlestick_boost += 0.05
+            
+            # Liquidity Sweeps
+            if sweep:
+                extra_reason_parts.append(f"Manipulación: {sweep['desc']}")
+                if signal == "BUY" and sweep['type'] == 'BULLISH_SWEEP':
+                    candlestick_boost += 0.08  # High confidence trap
+                elif signal == "SELL" and sweep['type'] == 'BEARISH_SWEEP':
+                    candlestick_boost += 0.08
+                    
+            # Return Zones (Order Blocks)
+            if ob:
+                # If current price is inside the OB
+                if ob['type'] == 'BULLISH_OB' and ob['bottom'] <= close <= ob['top'] and signal == 'BUY':
+                    candlestick_boost += 0.05
+                    extra_reason_parts.append("OB alcista mitigado")
+                elif ob['type'] == 'BEARISH_OB' and ob['bottom'] <= close <= ob['top'] and signal == 'SELL':
+                    candlestick_boost += 0.05
+                    extra_reason_parts.append("OB bajista mitigado")
+                    
+        except Exception as e:
+            pass # Failsafe
+
         if signal == "BUY":
             confidence = 0.85
             signal = "BUY"
             if trend_bias == "BULLISH":
                 confidence += 0.05 # Trend confluence
-                extra_reason = "12-Month Bullish Trend Confluence"
+                extra_reason_parts.append("12-Month Bullish Trend Confluence")
             
             if last_fvg and last_fvg['type'] == 'BULLISH':
                 confidence += 0.05  # Higher weight for ICT
-                extra_reason += " + FVG Institutional"
+                extra_reason_parts.append("FVG Institutional")
+                
+            confidence += candlestick_boost
+            
         elif signal == "SELL":
             confidence = 0.85
             signal = "SELL"
             if trend_bias == "BEARISH":
                 confidence += 0.05 # Trend confluence
-                extra_reason = "12-Month Bearish Trend Confluence"
+                extra_reason_parts.append("12-Month Bearish Trend Confluence")
                 
             if last_fvg and last_fvg['type'] == 'BEARISH':
                 confidence += 0.05 # Higher weight for ICT
-                extra_reason += " + FVG Institutional"
+                extra_reason_parts.append("FVG Institutional")
+                
+            confidence += candlestick_boost
 
+        extra_reason = " + ".join(extra_reason_parts)
         # APPLY SELF-LEARNING (Dynamic Weighting)
         try:
             from learning_brain import LearningBrain
