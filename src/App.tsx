@@ -51,7 +51,7 @@ function App() {
     <div className="app-container">
       <header className="app-header glass-card">
         <div className="header-left">
-          <h1 className="neon-text-cyan">ANAILIS BOT</h1>
+          <h1 className="neon-text-cyan">ANALISIS BOT TRADE</h1>
           <p className="subtitle">AI-Driven Trading Intelligence System</p>
         </div>
         <div className="header-right">
@@ -210,7 +210,7 @@ function App() {
       </main>
 
       <footer>
-        <p>&copy; 2026 ANAILIS BOT | Premium Trading UI</p>
+        <p>&copy; 2026 ANALISIS BOT TRADE | Premium Trading UI</p>
       </footer>
     </div>
   )

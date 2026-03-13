@@ -235,7 +235,7 @@ if __name__ == "__main__":
     print("🛰️ Intentando conectar con MetaTrader 5...")
     if bridge.connect():
         real_balance = bridge.get_balance()
-        print(f"✅ ANAILIS BOT LIVE - Saldo Real: ${real_balance:.2f}")
+        print(f"    ANALISIS BOT TRADE - Saldo Real: ${balance:.2f}")
     else:
         print("⚠️ Advertencia: No se pudo conectar a MT5. El sistema iniciará en modo espera.")
         
