@@ -129,6 +129,18 @@ class AnalysisEngine:
                 elif ob['type'] == 'BEARISH_OB' and ob['bottom'] <= close <= ob['top'] and signal == 'SELL':
                     candlestick_boost += 0.05
                     extra_reason_parts.append("OB bajista mitigado")
+            
+            # BOLLINGER BANDS CONFIRMATION
+            bb_upper, bb_lower = self.calculate_bollinger_bands()
+            curr_upper = bb_upper.iloc[-1]
+            curr_lower = bb_lower.iloc[-1]
+            
+            if signal == "BUY" and close <= curr_lower:
+                candlestick_boost += 0.07 # Price at extreme lower band
+                extra_reason_parts.append("BB Inferior (Sobreventa)")
+            elif signal == "SELL" and close >= curr_upper:
+                candlestick_boost += 0.07 # Price at extreme upper band
+                extra_reason_parts.append("BB Superior (Sobrecompra)")
                     
         except Exception as e:
             pass # Failsafe
