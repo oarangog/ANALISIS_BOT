@@ -141,6 +141,29 @@ class AnalysisEngine:
             elif signal == "SELL" and close >= curr_upper:
                 candlestick_boost += 0.07 # Price at extreme upper band
                 extra_reason_parts.append("BB Superior (Sobrecompra)")
+
+            # FIBONACCI RETRACEMENT (Last Swing)
+            swing_high = self.df['High'].tail(50).max()
+            swing_low = self.df['Low'].tail(50).min()
+            fib = self.calculate_fibonacci(swing_high, swing_low)
+            
+            # Check for proximity to Golden Zone (61.8%) or 50%
+            if signal == "BUY" and abs(close - fib['61.8']) / close < 0.001:
+                candlestick_boost += 0.05
+                extra_reason_parts.append("Fibonacci 61.8% (Golden Zone)")
+            elif signal == "SELL" and abs(close - fib['61.8']) / close < 0.001:
+                candlestick_boost += 0.05
+                extra_reason_parts.append("Fibonacci 61.8% (Golden Zone)")
+
+            # EMA/SMA ALIGNMENT (Momentum)
+            ema9 = self.calculate_ema(9).iloc[-1]
+            sma20 = self.calculate_sma(20).iloc[-1]
+            if signal == "BUY" and close > ema9 > sma20:
+                candlestick_boost += 0.04 # Momentum bullish
+                extra_reason_parts.append("Momentum Aligned (EMA > SMA)")
+            elif signal == "SELL" and close < ema9 < sma20:
+                candlestick_boost += 0.04 # Momentum bearish
+                extra_reason_parts.append("Momentum Aligned (EMA < SMA)")
                     
         except Exception as e:
             pass # Failsafe
