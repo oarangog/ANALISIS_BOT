@@ -114,7 +114,7 @@ function App() {
             {marketData.results && Object.keys(marketData.results).map((asset) => (
               <div key={asset} className="glass-card asset-card">
                 <div className="card-header">
-                  <h3 className="neon-text-cyan">{asset}</h3>
+                  <h3 className="neon-text-cyan">{asset} {asset === 'EURUSD' && <span style={{ fontSize: '0.6rem', color: '#666', verticalAlign: 'middle', marginLeft: '5px' }}>(ACTIVO BASE)</span>}</h3>
                   <span className={`status-pill ${marketData.results[asset].status.toLowerCase()}`}>
                     {marketData.results[asset].status}
                   </span>
@@ -128,11 +128,6 @@ function App() {
                 <p>SL: <span className="neon-text-red">{marketData.results[asset].sl}</span></p>
                 <p>TP: <span className="neon-text-green">{marketData.results[asset].tp}</span></p>
                 {marketData.results[asset].info && <p className="signal-extra">{marketData.results[asset].info}</p>}
-
-                <div className="risk-metrics">
-                  <p><strong>SL:</strong> {marketData.results[asset].sl}</p>
-                  <p><strong>TP:</strong> {marketData.results[asset].tp}</p>
-                </div>
 
                 <div className="tradingview-widget glass-card">
                   <p className="neon-text-cyan">Live {asset} Feed (XM Global)</p>
