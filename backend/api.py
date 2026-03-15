@@ -104,7 +104,7 @@ async def toggle_auto(request: AutoToggle):
 
 @app.get("/analysis")
 async def get_daily_analysis():
-    global AUTO_TRADING_ENABLED, CURRENT_COMPOUND_AMOUNT, LAST_OUTCOME
+    global AUTO_TRADING_ENABLED, CURRENT_COMPOUND_AMOUNT, LAST_OUTCOME, INVESTMENT_AMOUNT
     
     # DYNAMIC SCANNING: Fetch all major symbols from MT5
     all_symbols = bridge.get_all_symbols()
@@ -198,15 +198,33 @@ async def get_daily_analysis():
         history = bridge.get_history(count=20)
         for deal in history:
             if str(deal.get('ticket')) == str(ticket):
-                outcome = "WIN" if deal['profit'] > 0 else "LOSS"
+                profit = deal['profit']
+                outcome = "WIN" if profit > 0 else "LOSS"
+
+                # ✅ COMPOUNDING LOGIC
+                # WIN: add real profit to running compound total
+                # LOSS: reset to original base amount set by user
+                if outcome == "WIN":
+                    CURRENT_COMPOUND_AMOUNT += profit
+                    LAST_OUTCOME = "WIN"
+                    print(f"✅ [COMPOUND] WIN +${profit:.2f} → Next trade: ${CURRENT_COMPOUND_AMOUNT:.2f}")
+                else:
+                    CURRENT_COMPOUND_AMOUNT = INVESTMENT_AMOUNT  # Reset to user's original base
+                    LAST_OUTCOME = "LOSS"
+                    print(f"❌ [COMPOUND] LOSS ${profit:.2f} → Resetting to base: ${INVESTMENT_AMOUNT:.2f}")
+
+                # Persist compound state so restart preserves it
+                save_config()
+
                 # Update Brain
                 brain.update_trade_outcome(str(ticket), outcome)
-                # Send Report
+
+                # Send Report with updated next amount
                 await telegram.send_outcome_report(
-                    ot['symbol'], 
-                    outcome, 
-                    deal['profit'], 
-                    ot['strategy'], 
+                    ot['symbol'],
+                    outcome,
+                    profit,
+                    ot['strategy'],
                     CURRENT_COMPOUND_AMOUNT
                 )
                 print(f"📢 [TELEGRAM REPORT] Ticket {ticket} closed as {outcome}")
