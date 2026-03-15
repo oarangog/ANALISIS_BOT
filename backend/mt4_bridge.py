@@ -127,6 +127,8 @@ class MT4Bridge:
         df['time'] = pd.to_datetime(df['time'], unit='s')
         # Rename columns to match AnalysisEngine expectation
         df = df.rename(columns={'close': 'Close', 'high': 'High', 'low': 'Low', 'open': 'Open'})
+        # Store symbol name on DataFrame so AnalysisEngine can pass it to LearningBrain (C3 fix)
+        df.name = real_symbol
         return df
 
     def get_all_symbols(self, group="*", sector=None):
@@ -157,14 +159,14 @@ class MT4Bridge:
 
     def get_history(self, count=5):
         """
-        Get last N closed trades
+        Get last N closed trades. Looks back 7 days to catch long-duration trades. (Fix C6)
         """
         if not self.connected and not self.connect():
             return []
             
         from datetime import datetime, timedelta
         end_time = datetime.now()
-        start_time = end_time - timedelta(days=1)
+        start_time = end_time - timedelta(days=7)  # Was 1 day - now 7 to catch all trades
         
         deals = mt5.history_deals_get(start_time, end_time)
         if deals is None or len(deals) == 0:

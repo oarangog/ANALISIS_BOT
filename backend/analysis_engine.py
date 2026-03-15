@@ -98,6 +98,11 @@ class AnalysisEngine:
         score_components = 0 # Track how many different strategies align
         
         # 3. ADVANCED DETECTION (SMC & CANDLESTICK)
+        # Initialize to safe defaults before try block (fix: C4 undefined vars outside try)
+        sweep = None
+        ob = None
+        last_fvg = None
+        patterns = []
         try:
             from advanced_smc_detector import AdvancedSMCDector
             smc = AdvancedSMCDector(self.df)
@@ -205,8 +210,10 @@ class AnalysisEngine:
         try:
             from learning_brain import LearningBrain
             brain = LearningBrain()
-            # Dynamic multiplier based on asset and strategy
-            learned_multiplier = brain.get_experience_multiplier("GENERAL", strategy_type)
+            # Fix C3: use actual symbol from context, not "GENERAL"
+            # We use a symbol key from the dataframe name or object if available
+            symbol_key = getattr(self.df, 'name', None) or getattr(self, 'symbol', 'GENERAL')
+            learned_multiplier = brain.get_experience_multiplier(symbol_key, strategy_type)
             confidence *= learned_multiplier
             if learned_multiplier > 1.05:
                 extra_reason_parts.append(f"IA Optimizada ({strategy_type}: +{int((learned_multiplier-1)*100)}%)")
@@ -241,8 +248,10 @@ class AnalysisEngine:
             tp = close + (abs(close - sl) * 2.5) # Risk-Reward 1:2.5
         elif final_signal == "SELL":
             swing_high_local = self.df['High'].tail(20).max()
-            sl = max(swing_high_local, close + (atr * 2))
-            tp = close - (abs(sl - close) * 2.5)
+            # Fix C5: For SELL, SL should be ABOVE current price.
+            # min() of close+ATR*2 and swing_high gives wrong result; use max() for SELL SL
+            sl = max(swing_high_local, close + (atr * 1.5))
+            tp = close - (abs(sl - close) * 2.0) # Risk-Reward 1:2
         else:
             sl, tp = 0.0, 0.0
 

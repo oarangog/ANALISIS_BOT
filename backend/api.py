@@ -86,6 +86,8 @@ class TradeRequest(BaseModel):
     sl: float = 0.0
     tp: float = 0.0
     strategy: str = "CORE_V2"
+    confidence: float = 0.0   # M2 fix: carry real confidence to telegram alert
+    elite_score: float = 0.0  # M2 fix: carry real elite score to telegram alert
 
 @app.post("/auto-toggle")
 async def toggle_auto(request: AutoToggle):
@@ -140,18 +142,24 @@ async def get_daily_analysis():
         results = {item['symbol']: {k: v for k, v in item.items() if k != 'symbol'} for item in elite_results}
 
     # AUTO-TRADING EXECUTION for the top winners
+    FOREX_PAIRS = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURJPY", "GBPJPY"}
     for asset, signal_data in results.items():
         if signal_data['confidence'] >= 92 and AUTO_TRADING_ENABLED:
-            if is_open:
-                print(f"🚀 [AUTO-ELITE] {asset}: {signal_data['strategy']} (Elite: {signal_data['elite_score']} | Win: {signal_data['backtest_winrate']}%)")
+            # M5 fix: Allow Forex 24/5, restrict indices/metals to NYSE hours
+            is_forex = any(pair in asset for pair in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"])
+            session_clear = is_open or is_forex
+            if session_clear:
+                print(f"🚀 [AUTO-ELITE] {asset}: {signal_data['strategy']} (Elite: {signal_data.get('elite_score',0)} | Win: {signal_data.get('backtest_winrate',0)}%)")
                 await execute_trade(TradeRequest(
-                    symbol=asset, 
-                    type=signal_data['signal'], 
-                    volume=0.01, 
+                    symbol=asset,
+                    type=signal_data['signal'],
+                    volume=0.01,
                     amount=CURRENT_COMPOUND_AMOUNT,
                     sl=signal_data['sl'],
                     tp=signal_data['tp'],
-                    strategy=signal_data['strategy']
+                    strategy=signal_data['strategy'],
+                    confidence=signal_data['confidence'],     # M2 fix
+                    elite_score=signal_data.get('elite_score', 0)  # M2 fix
                 ))
             else:
                 print(f"⏳ [SESSION-WAIT] {asset} ({signal_data['confidence']}%) - {session_msg}")
@@ -214,8 +222,10 @@ async def execute_trade(request: TradeRequest):
     if real_balance < request.amount:
         return {"status": "ERROR", "message": f"Fondos insuficientes. Saldo: ${real_balance}"}
 
-    if not bridge.connect():
-        raise HTTPException(status_code=500, detail="Error de conexión MT5")
+    if not bridge.connected:
+        # C2 fix: Only try to reconnect if not already connected. Don't forcefully reconnect
+        if not bridge.connect():
+            raise HTTPException(status_code=500, detail="Error de conexión MT5")
     
     # EXECUTE TRADE IN MT5
     trade_result = bridge.execute_trade(
@@ -239,50 +249,37 @@ async def execute_trade(request: TradeRequest):
     
     # LOG IN BRAIN (Initial context)
     if ticket != "N/A":
-        # Send Telegram Execution Alert
+        # Send Telegram Execution Alert with REAL confidence and elite_score (M2 fix)
         try:
-            current_price = bridge.get_historical_data(request.symbol, count=1).iloc[-1]['Close']
+            current_price = bridge.get_historical_data(request.symbol, count=1)
+            if current_price is not None:
+                current_price = current_price.iloc[-1]['Close']
+            else:
+                current_price = 0.0
             await telegram.send_execution_alert(
-                request.symbol, 
-                request.type, 
-                current_price, 
-                request.strategy, 
-                0.0, # Will get confidence from caller or context if needed
-                0.0  # Elite score placeholder
+                request.symbol,
+                request.type,
+                current_price,
+                request.strategy,
+                request.confidence,    # M2 fix: use real value
+                request.elite_score    # M2 fix: use real value
             )
-        except:
-            pass
+        except Exception as te:
+            print(f"⚠️ Telegram alert error: {te}")
 
         # Capture basic context for the brain
         brain.log_trade_start(
-            str(ticket), 
-            request.symbol, 
-            request.type, 
-            0.0, 
+            str(ticket),
+            request.symbol,
+            request.type,
+            0.0,
             {"strategy": request.strategy}
         )
 
-    # Note: Outcome is usually updated in the next scan via Bridge.get_history
-    # But for instant feedback we can check last closed deal
-    history = bridge.get_history(count=1)
-    if history and str(history[0].get('ticket')) == str(ticket):
-        last_profit = history[0]['profit']
-        if last_profit > 0:
-            CURRENT_COMPOUND_AMOUNT += last_profit
-            LAST_OUTCOME = "WIN"
-        elif last_profit < 0:
-            CURRENT_COMPOUND_AMOUNT = INVESTMENT_AMOUNT
-            LAST_OUTCOME = "LOSS"
-        
-        brain.update_trade_outcome(str(ticket), LAST_OUTCOME)
-        # Send Telegram Outcome Report
-        await telegram.send_outcome_report(
-            request.symbol, 
-            LAST_OUTCOME, 
-            last_profit, 
-            request.strategy, 
-            CURRENT_COMPOUND_AMOUNT
-        )
+    # C8 fix: Don't try to instantly match ticket in closed history.
+    # Market orders take time to settle. Outcome is tracked by the monitoring loop.
+    # Only update LAST_OUTCOME to WAITING so the UI reflects state.
+    LAST_OUTCOME = "WAITING_RESULT"
 
     print(f"🚀 [MT5 EXEC] TICKET: {ticket} | {request.symbol} | {request.strategy}")
     
