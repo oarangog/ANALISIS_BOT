@@ -10,26 +10,46 @@ class TelegramService:
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.api_url = f"https://api.telegram.org/bot{self.token}/sendMessage"
 
-    async def send_signal(self, asset, signal_data):
+    async def send_execution_alert(self, symbol, type, price, strategy, confidence, elite_score):
         if not self.token or not self.chat_id:
             return
 
         message = (
-            f"🎯 **ALERTA DE ALTA PRECISIÓN** 🎯\n\n"
-            f"💎 **Activo:** {asset}\n"
-            f"💹 **Operación:** {signal_data['signal']}\n"
-            f"🔥 **Confianza:** {signal_data['confidence']}%\n"
-            f"⏱️ **Temporalidad:** {signal_data['timeframe']}\n"
-            f"🔔 **Entrada YA:** {signal_data['entry_time']}\n"
-            f"⌛ **Cierre/Expiración:** {signal_data['expiry_time']}\n"
-            f"📍 **Precio Ref:** {signal_data.get('entry', 'Actual')}\n"
-            f"🛑 **Stop Loss:** {signal_data['sl']}\n"
-            f"✅ **Take Profit:** {signal_data['tp']}\n"
-            f"🌍 **Zona Horaria:** {signal_data.get('timezone', 'UTC-5')}\n"
-            f"🔍 **Base:** {signal_data.get('info', 'Confluencia Técnica')}\n\n"
-            f"⚠️ *Nota: Inicie la operación solo si la vela confirma la entrada.*"
+            f"🚀 **OPERACIÓN EJECUTADA (IA)** 🚀\n\n"
+            f"💎 **Activo:** {symbol}\n"
+            f"💹 **Tipo:** {type}\n"
+            f"📍 **Precio:** {price}\n"
+            f"🧠 **Estrategia:** {strategy}\n"
+            f"🔥 **Confianza:** {confidence}%\n"
+            f"🏆 **Elite Score:** {elite_score}\n"
+            f"⚙️ **Estado:** Gestionando por IA..."
         )
 
+        await self._send_request(message)
+
+    async def send_outcome_report(self, symbol, outcome, profit, strategy, next_amount):
+        if not self.token or not self.chat_id:
+            return
+
+        icon = "✅" if outcome == "WIN" else "❌"
+        status_text = "GANANCIA RECOGIDA" if outcome == "WIN" else "PÉRDIDA / PROTECCIÓN"
+        correction_msg = ""
+        
+        if outcome == "LOSS":
+            correction_msg = "\n\n🧠 **Corrección IA:** El cerebro ha detectado la falla y ha ajustado los pesos de la estrategia para evitar redundancia en este activo."
+
+        message = (
+            f"{icon} **REPORTE DE RESULTADO** {icon}\n\n"
+            f"💎 **Activo:** {symbol}\n"
+            f"📊 **Resultado:** {outcome} ({status_text})\n"
+            f"💰 **Profit:** ${profit:+.2f}\n"
+            f"🧠 **Estrategia:** {strategy}\n"
+            f"📈 **Próxima Inversión:** ${next_amount:.2f}{correction_msg}"
+        )
+
+        await self._send_request(message)
+
+    async def _send_request(self, message):
         async with httpx.AsyncClient() as client:
             try:
                 await client.post(self.api_url, json={

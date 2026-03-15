@@ -159,3 +159,18 @@ class LearningBrain:
         multiplier = row[0] if row and row[0] is not None else 1.0
         return multiplier
 
+    def get_open_trades(self):
+        """Returns a list of tickets and strategies for currently open trades"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT ticket, symbol, signal_type FROM trades WHERE status = "OPEN"')
+        rows = cursor.fetchall()
+        conn.close()
+        
+        trades = []
+        for row in rows:
+            ticket, symbol, sig_strat = row
+            strategy = sig_strat.split('_')[-1] if '_' in sig_strat else 'CORE_V2'
+            trades.append({"ticket": ticket, "symbol": symbol, "strategy": strategy})
+        return trades
+

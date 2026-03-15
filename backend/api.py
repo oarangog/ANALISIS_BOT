@@ -166,6 +166,30 @@ async def get_daily_analysis():
                 engine = AnalysisEngine(df)
                 results[asset] = {**engine.get_signals(), "status": "STABLE", "balance": real_balance}
 
+    # --- OUTCOME MONITORING LOOP ---
+    # Check if any previously opened trades have closed to report Win/Loss
+    open_trades = brain.get_open_trades()
+    for ot in open_trades:
+        ticket = ot['ticket']
+        # Check if ticket is in recent history (closed)
+        history = bridge.get_history(count=20)
+        for deal in history:
+            if str(deal.get('ticket')) == str(ticket):
+                outcome = "WIN" if deal['profit'] > 0 else "LOSS"
+                # Update Brain
+                brain.update_trade_outcome(str(ticket), outcome)
+                # Send Report
+                await telegram.send_outcome_report(
+                    ot['symbol'], 
+                    outcome, 
+                    deal['profit'], 
+                    ot['strategy'], 
+                    CURRENT_COMPOUND_AMOUNT
+                )
+                print(f"📢 [TELEGRAM REPORT] Ticket {ticket} closed as {outcome}")
+                break
+    # -------------------------------
+
     history = bridge.get_history()
 
     response_data = {
@@ -215,12 +239,26 @@ async def execute_trade(request: TradeRequest):
     
     # LOG IN BRAIN (Initial context)
     if ticket != "N/A":
+        # Send Telegram Execution Alert
+        try:
+            current_price = bridge.get_historical_data(request.symbol, count=1).iloc[-1]['Close']
+            await telegram.send_execution_alert(
+                request.symbol, 
+                request.type, 
+                current_price, 
+                request.strategy, 
+                0.0, # Will get confidence from caller or context if needed
+                0.0  # Elite score placeholder
+            )
+        except:
+            pass
+
         # Capture basic context for the brain
         brain.log_trade_start(
             str(ticket), 
             request.symbol, 
             request.type, 
-            0.0, # Price will be updated later or extracted from history
+            0.0, 
             {"strategy": request.strategy}
         )
 
@@ -235,7 +273,16 @@ async def execute_trade(request: TradeRequest):
         elif last_profit < 0:
             CURRENT_COMPOUND_AMOUNT = INVESTMENT_AMOUNT
             LAST_OUTCOME = "LOSS"
+        
         brain.update_trade_outcome(str(ticket), LAST_OUTCOME)
+        # Send Telegram Outcome Report
+        await telegram.send_outcome_report(
+            request.symbol, 
+            LAST_OUTCOME, 
+            last_profit, 
+            request.strategy, 
+            CURRENT_COMPOUND_AMOUNT
+        )
 
     print(f"🚀 [MT5 EXEC] TICKET: {ticket} | {request.symbol} | {request.strategy}")
     
