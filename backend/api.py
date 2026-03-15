@@ -5,6 +5,7 @@ from analysis_engine import AnalysisEngine
 from mt4_bridge import MT4Bridge
 from telegram_service import TelegramService
 from learning_brain import LearningBrain
+from news_feed import NewsFeedService
 import pandas as pd
 import uvicorn
 
@@ -12,6 +13,7 @@ app = FastAPI()
 telegram = TelegramService()
 bridge = MT4Bridge()
 brain = LearningBrain()
+news = NewsFeedService()
 
 import json
 import pytz
@@ -148,6 +150,19 @@ async def get_daily_analysis():
             # M5 fix: Allow Forex 24/5, restrict indices/metals to NYSE hours
             is_forex = any(pair in asset for pair in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"])
             session_clear = is_open or is_forex
+
+            # NEWS BLACKOUT CHECK: Block trading around high-impact news
+            in_blackout, news_title = news.is_news_blackout(symbol=asset)
+            if in_blackout:
+                print(f"🚨 [NEWS BLOCK] Skipping {asset} – Blackout: {news_title}")
+                await telegram.send_signal(asset, {  # Reuse send_signal as a warning
+                    'signal': 'BLOCKED', 'confidence': signal_data['confidence'],
+                    'timeframe': 'N/A', 'entry_time': 'N/A', 'expiry_time': 'N/A',
+                    'sl': signal_data['sl'], 'tp': signal_data['tp'],
+                    'info': f'⚠️ Noticia de Alto Impacto: {news_title}'
+                }) if False else None  # Silently skip for now; can notify via telegram if needed
+                continue
+
             if session_clear:
                 print(f"🚀 [AUTO-ELITE] {asset}: {signal_data['strategy']} (Elite: {signal_data.get('elite_score',0)} | Win: {signal_data.get('backtest_winrate',0)}%)")
                 await execute_trade(TradeRequest(
@@ -158,8 +173,8 @@ async def get_daily_analysis():
                     sl=signal_data['sl'],
                     tp=signal_data['tp'],
                     strategy=signal_data['strategy'],
-                    confidence=signal_data['confidence'],     # M2 fix
-                    elite_score=signal_data.get('elite_score', 0)  # M2 fix
+                    confidence=signal_data['confidence'],
+                    elite_score=signal_data.get('elite_score', 0)
                 ))
             else:
                 print(f"⏳ [SESSION-WAIT] {asset} ({signal_data['confidence']}%) - {session_msg}")
@@ -200,6 +215,13 @@ async def get_daily_analysis():
 
     history = bridge.get_history()
 
+    # Fetch upcoming news for the dashboard
+    upcoming_news = []
+    try:
+        upcoming_news = news.get_upcoming_events(hours_ahead=24)
+    except Exception:
+        pass
+
     response_data = {
         "results": results,
         "last_ticket": LAST_TICKET,
@@ -210,7 +232,8 @@ async def get_daily_analysis():
             "base_amount": INVESTMENT_AMOUNT,
             "current_amount": CURRENT_COMPOUND_AMOUNT,
             "last_outcome": LAST_OUTCOME
-        }
+        },
+        "upcoming_news": upcoming_news  # 📰 Economic Calendar for frontend display
     }
     return response_data
 
