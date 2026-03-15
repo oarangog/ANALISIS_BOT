@@ -52,6 +52,7 @@ class LearningBrain:
                 win_rate REAL DEFAULT 0.0,
                 weight REAL DEFAULT 1.0,
                 total_trades INTEGER DEFAULT 0,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (symbol, strategy_name)
             )
         ''')
@@ -64,8 +65,11 @@ class LearningBrain:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
+            # We also store the primary reason (strategy) if provided in context
+            strategy = context.get('strategy', 'CORE_V2')
+            
             cursor.execute('INSERT INTO trades (ticket, symbol, signal_type, entry_price, status) VALUES (?, ?, ?, ?, ?)',
-                         (str(ticket), symbol, signal_type, price, 'OPEN'))
+                         (str(ticket), symbol, f"{signal_type}_{strategy}", price, 'OPEN'))
             
             cursor.execute('''
                 INSERT INTO market_context (ticket, rsi, ema_spread, trend_bias, fvg_present, volatility)
@@ -88,12 +92,13 @@ class LearningBrain:
             # Update status
             cursor.execute('UPDATE trades SET status = ? WHERE ticket = ?', (outcome, str(ticket)))
             
-            # Fetch symbol for weighting
-            cursor.execute('SELECT symbol FROM trades WHERE ticket = ?', (str(ticket),))
+            # Fetch details for weighting
+            cursor.execute('SELECT symbol, signal_type FROM trades WHERE ticket = ?', (str(ticket),))
             row = cursor.fetchone()
             if row:
-                symbol = row[0]
-                self._recalculate_weights(symbol)
+                symbol, sig_strat = row
+                strategy = sig_strat.split('_')[-1] if '_' in sig_strat else 'CORE_V2'
+                self._recalculate_weights(symbol, strategy)
                 
             conn.commit()
         except Exception as e:
@@ -101,40 +106,56 @@ class LearningBrain:
         finally:
             conn.close()
 
-    def _recalculate_weights(self, symbol):
-        """The core learning logic: adjusts weights based on win rate per symbol"""
+    def _recalculate_weights(self, symbol, strategy):
+        """The core learning logic: adjusts weights based on strategy performance per symbol"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Simplified AI: Favor symbols/strategies that win more
+        # AI: Favor strategies that win more in specific assets
         cursor.execute('''
             SELECT COUNT(*) as total, 
                    SUM(CASE WHEN status = 'WIN' THEN 1 ELSE 0 END) as wins
-            FROM trades WHERE symbol = ? AND status != 'OPEN'
-        ''', (symbol,))
+            FROM trades 
+            WHERE symbol = ? AND signal_type LIKE ? AND status != 'OPEN'
+        ''', (symbol, f"%_{strategy}"))
         
         stats = cursor.fetchone()
         if stats and stats[0] > 0:
             total, wins = stats
             win_rate = wins / total
             
-            # Update weights: Strong win rate -> Higher weight (Max 2.0)
-            weight = 1.0 + (win_rate - 0.5) * 2.0
-            weight = max(0.5, min(2.0, weight)) # Hard limits
+            # Learning sensitivity: If high trades, be more aggressive with weight change
+            sensitivity = 2.0 if total > 5 else 1.2
+            
+            # Update weights: Strong win rate -> Higher weight (Max 2.0, Min 0.5)
+            weight = 1.0 + (win_rate - 0.55) * sensitivity # Bias toward 55% win rate
+            weight = max(0.4, min(2.5, weight)) 
             
             cursor.execute('''
-                INSERT OR REPLACE INTO strategy_weights (symbol, strategy_name, win_rate, weight, total_trades)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (symbol, 'CORE_V1', win_rate, weight, total))
+                INSERT OR REPLACE INTO strategy_weights (symbol, strategy_name, win_rate, weight, total_trades, last_updated)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (symbol, strategy, win_rate, weight, total))
             
         conn.commit()
         conn.close()
 
-    def get_experience_multiplier(self, symbol):
-        """Returns the learned multiplier for a specific asset"""
+    def get_experience_multiplier(self, symbol, strategy="CORE_V2"):
+        """Returns the learned multiplier for a specific asset and strategy"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute('SELECT weight FROM strategy_weights WHERE symbol = ?', (symbol,))
+        
+        # Try specific strategy first
+        cursor.execute('SELECT weight FROM strategy_weights WHERE symbol = ? AND strategy_name = ?', (symbol, strategy))
         row = cursor.fetchone()
+        
+        if not row:
+            # Fallback to general symbol performance (average of all strategies for this symbol)
+            cursor.execute('SELECT AVG(weight) FROM strategy_weights WHERE symbol = ?', (symbol,))
+            row = cursor.fetchone()
+            
         conn.close()
-        return row[0] if row else 1.0
+        
+        # If still no data, return 1.0 (Neutral)
+        multiplier = row[0] if row and row[0] is not None else 1.0
+        return multiplier
+

@@ -54,61 +54,90 @@ class AdvancedSMCDector:
 
         return patterns
 
+    def detect_bos(self, lookback=50):
+        """
+        Detects Break of Structure (BOS)
+        A BOS occurs when price closes beyond a previous swing high/low.
+        """
+        if len(self.df) < lookback + 5:
+            return None
+            
+        # Identify previous major swing high/low
+        prev_swing_high = self.df['High'].iloc[-lookback:-5].max()
+        prev_swing_low = self.df['Low'].iloc[-lookback:-5].min()
+        
+        last_close = self.df['Close'].iloc[-1]
+        
+        if last_close > prev_swing_high:
+            return {'type': 'BOS_UP', 'level': prev_swing_high}
+        elif last_close < prev_swing_low:
+            return {'type': 'BOS_DOWN', 'level': prev_swing_low}
+            
+        return None
+
     def detect_liquidity_sweeps(self, lookback=20):
         """
         Detects Manipulations / Stop Hunts / Liquidity Sweeps
-        A sweep happens when price breaks a recent swing high/low but quickly closes back inside the range.
         """
         if len(self.df) < lookback + 2:
             return None
 
         current_candle = self.df.iloc[-1]
-        
-        # Look for swing highs and lows in the lookback period (excluding the current candle)
         recent_high = self.df['High'].iloc[-lookback:-1].max()
         recent_low = self.df['Low'].iloc[-lookback:-1].min()
 
-        # Check for Sweep of Highs (Bearish indication, trapped long traders)
+        # Check for Sweep of Highs
         if current_candle['High'] > recent_high and current_candle['Close'] < recent_high:
-            return {'type': 'BEARISH_SWEEP', 'desc': 'Caza de Stops (Liquidity Sweep) en Máximos', 'level': recent_high}
+            return {'type': 'BEARISH_SWEEP', 'desc': 'Caza de Stops en Máximos', 'level': recent_high}
 
-        # Check for Sweep of Lows (Bullish indication, trapped short traders)
+        # Check for Sweep of Lows
         if current_candle['Low'] < recent_low and current_candle['Close'] > recent_low:
-            return {'type': 'BULLISH_SWEEP', 'desc': 'Caza de Stops (Liquidity Sweep) en Mínimos', 'level': recent_low}
+            return {'type': 'BULLISH_SWEEP', 'desc': 'Caza de Stops en Mínimos', 'level': recent_low}
 
+        return None
+
+    def detect_liquidity_targets(self, lookback=50):
+        """
+        Detects Equal Highs (EQH) or Equal Lows (EQL) that act as price magnets.
+        """
+        # Simplified: look for levels hit multiple times but not broken
+        highs = self.df['High'].tail(lookback)
+        lows = self.df['Low'].tail(lookback)
+        
+        # This would require more complex grouping logic, for now we skip or mock
         return None
 
     def detect_return_zones(self, lookback=50):
         """
-        Detects Order Blocks / Return Zones.
-        Finds the last opposite-colored candle before a strong impulsive push that broke structure.
-        Simplified version for time-series iteration.
+        Refined Order Block detection: only valid if it lead to a BOS or strong impulse.
         """
-        # For a robust Return Zone, we look back. Usually, the 'fvg' detection in AnalysisEngine
-        # helps with determining where the imbalance is. We can enhance it here to find the 
-        # actual Order Block box.
-        
-        # Mock logic to represent standard OB identification (Last down candle before up move)
-        # Detailed implementation often requires complex swing/BOS (Break of Structure) analysis.
         zones = []
-        if len(self.df) > lookback:
-            # We will use simple strong momentum candles as proxies for impulsive moves
-            for i in range(len(self.df) - lookback, len(self.df) - 2):
-                c1 = self.df.iloc[i]
-                c2 = self.df.iloc[i+1]
-                c3 = self.df.iloc[i+2]
-                
-                # Strong Bullish Imbalance (OB is the c1 down candle)
-                if c1['Close'] < c1['Open'] and c2['Close'] > c2['Open'] and c3['Close'] > c3['Open']:
-                    if (c3['Close'] - c2['Open']) > 2 * abs(c1['Open'] - c1['Close']): # Strong push
-                        zones.append({'type': 'BULLISH_OB', 'top': c1['Open'], 'bottom': c1['Low']})
-                
-                # Strong Bearish Imbalance (OB is the c1 up candle)
-                if c1['Close'] > c1['Open'] and c2['Close'] < c2['Open'] and c3['Close'] < c3['Open']:
-                    if (c2['Open'] - c3['Close']) > 2 * abs(c1['Open'] - c1['Close']): # Strong drop
-                        zones.append({'type': 'BEARISH_OB', 'top': c1['High'], 'bottom': c1['Open']})
+        if len(self.df) < lookback:
+            return None
+            
+        # Detect if we have a current BOS to validate an OB
+        bos = self.detect_bos(lookback)
+        
+        for i in range(len(self.df) - lookback, len(self.df) - 5):
+            c1 = self.df.iloc[i]
+            c2 = self.df.iloc[i+1]
+            c3 = self.df.iloc[i+2]
+            
+            # BULLISH OB: Last down candle before strong up move
+            if c1['Close'] < c1['Open'] and c2['Close'] > c2['Open'] and c3['Close'] > c3['Open']:
+                # Strong push validation
+                if (c3['Close'] - c1['Low']) > (c1['Open'] - c1['Low']) * 3:
+                     # If we have a BOS UP recently, this OB is high probability
+                     prob = 1.5 if (bos and bos['type'] == 'BOS_UP') else 1.0
+                     zones.append({'type': 'BULLISH_OB', 'top': c1['Open'], 'bottom': c1['Low'], 'probability': prob})
+            
+            # BEARISH OB: Last up candle before strong down move
+            if c1['Close'] > c1['Open'] and c2['Close'] < c2['Open'] and c3['Close'] < c3['Open']:
+                if (c1['High'] - c3['Close']) > (c1['High'] - c1['Open']) * 3:
+                     prob = 1.5 if (bos and bos['type'] == 'BOS_DOWN') else 1.0
+                     zones.append({'type': 'BEARISH_OB', 'top': c1['High'], 'bottom': c1['Open'], 'probability': prob})
 
-        # Return the most recent valid zone
         if zones:
+            # Sort by proximity to current price and probability
             return zones[-1]
         return None

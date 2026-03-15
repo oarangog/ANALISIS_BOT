@@ -50,28 +50,62 @@ class MT4Bridge:
 
     def _resolve_symbol(self, symbol):
         """
-        Detects the real symbol name in MT5 (handling suffixes like #)
+        Detects the real symbol name in MT5 and ensures it's active in Market Watch
+        Handles common aliases (NAS100 -> US100, SPX500 -> US500, XAUUSD -> GOLD)
         """
         if not self.connected and not self.connect():
             return symbol
             
-        # Try exact match
+        # Try exact match first
         sym = mt5.symbol_info(symbol)
         if sym:
-            # print(f"🔍 Symbol match: {symbol} -> {sym.name}")
+            if not sym.visible:
+                mt5.symbol_select(sym.name, True)
             return sym.name
             
-        # Try with # suffix (XM Global style)
-        sym_sharp = mt5.symbol_info(symbol + "#")
-        if sym_sharp:
-            print(f"🔍 Symbol resolved (XM Suffix): {symbol} -> {sym_sharp.name}")
-            return sym_sharp.name
+        # Common Aliases (Broker specific naming)
+        aliases = {
+            "NAS100": "US100",
+            "SPX500": "US500",
+            "XAUUSD": "GOLD",
+            "XAGUSD": "SILVER",
+            "US30": "US30",
+            "GER40": "GER40"
+        }
+        
+        search_names = [symbol]
+        if symbol in aliases:
+            search_names.append(aliases[symbol])
             
-        # Search for any symbol containing the base name
-        found = mt5.symbols_get(group=f"*{symbol}*")
-        if found:
-            print(f"🔍 Symbol resolved (Pattern): {symbol} -> {found[0].name}")
-            return found[0].name
+        # Common Forex/CFD suffixes (Priority order)
+        suffixes = ["Cash#", "#", "Cash", "+", ".m", ".i", "_i", ".st", ".pro", ""]
+        
+        for name in search_names:
+            for suffix in suffixes:
+                candidate = name + suffix
+                sym_s = mt5.symbol_info(candidate)
+                if sym_s:
+                    if not sym_s.visible:
+                        mt5.symbol_select(sym_s.name, True)
+                    return sym_s.name
+                
+        # Search for any symbol containing the base name or alias
+        # Priority: Symbols ending in Cash# or #
+        for name in search_names:
+            found = mt5.symbols_get(group=f"*{name}*")
+            if found:
+                # Filter for trading-like symbols first
+                trading_symbols = [s.name for s in found if s.name.endswith("#") or "Cash" in s.name]
+                if trading_symbols:
+                    # Pick the shortest or most 'cash-like'
+                    res = sorted(trading_symbols, key=len)[0]
+                else:
+                    res = found[0].name
+                    
+                if not mt5.symbol_info(res).visible:
+                    mt5.symbol_select(res, True)
+                print(f"🔍 Symbol resolved (Smart Pattern {name}): {symbol} -> {res}")
+                return res
             
         print(f"⚠️ Symbol NOT resolved: {symbol}. Using as is.")
         return symbol
@@ -97,23 +131,29 @@ class MT4Bridge:
 
     def get_all_symbols(self, group="*", sector=None):
         """
-        Get major symbols from MT5
+        Returns the 18 preferred assets for the bot as indicated by the user.
+        Ensures they are resolved to the broker's specific naming convention.
         """
-        if not self.connected and not self.connect():
-            return []
-            
-        symbols = mt5.symbols_get(group)
-        if symbols is None:
-            return []
-            
-        # Return only a manageable list of symbols
-        filtered = []
-        for s in symbols:
-            if s.visible and ('.com' not in s.name) and (len(s.name) <= 6 or 'USD' in s.name):
-                filtered.append(s.name)
+        preferred = [
+            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", # Forex Majors
+            "EURJPY", "GBPJPY",                                              # Forex Minors/Crosses
+            "XAUUSD", "XAGUSD",                                              # Metals
+            "BTCUSD", "ETHUSD", "LTCUSD",                                    # Crypto
+            "US30", "SPX500", "NAS100", "GER40"                               # Indices
+        ]
         
-        # Ensure we don't exceed the list bounds
-        return filtered[0:20] 
+        if not self.connected and not self.connect():
+            return preferred
+            
+        resolved_list = []
+        for sym in preferred:
+            real_name = self._resolve_symbol(sym)
+            # Only add if we can actually get info for it (broker supports it)
+            info = mt5.symbol_info(real_name)
+            if info:
+                resolved_list.append(real_name)
+                
+        return resolved_list
 
     def get_history(self, count=5):
         """

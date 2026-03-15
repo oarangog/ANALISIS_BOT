@@ -69,172 +69,197 @@ class AnalysisEngine:
         return "Not implemented - requires volume data"
 
     def get_signals(self):
-        # AI Confidence Simulation
-        # Long-term Trend (Last 12 months check)
-        # Using 200 SMA on the large dataset
-        sma200_long = self.df['Close'].rolling(window=200).mean().iloc[-1]
-        
+        """
+        Refined signal generation with multi-confluence and proper logic flow.
+        1. Establish Trend/Momentum Bias
+        2. Detect SMC/Candlestick Patterns
+        3. Apply Confluences (BB, Fibonacci)
+        4. Calculate Confidence and Final Signal
+        """
+        # 1. BASE BIAS (Trend & Momentum)
+        sma200 = self.df['Close'].rolling(window=200).mean().iloc[-1]
         sma20 = self.calculate_sma(20).iloc[-1]
         ema9 = self.calculate_ema(9).iloc[-1]
         close = self.df['Close'].iloc[-1]
         atr = self.calculate_atr().iloc[-1]
-        fvgs = self.detect_fvg()
         
-        # Initial stats
+        # Bias based on 200 SMA and 9/20 EMA cross
+        trend_bias = "BULLISH" if close > sma200 else "BEARISH"
+        momentum = "BULLISH" if close > ema9 > sma20 else ("BEARISH" if close < ema9 < sma20 else "NEUTRAL")
+        
+        # 2. POTENTIAL SIGNAL IDENTIFICATION
+        # We start with a potential signal if momentum and trend align or if there's a strong rejection
+        potential_signal = "NEUTRAL"
+        if momentum == trend_bias:
+            potential_signal = trend_bias
+        
         confidence = 0.0
-        signal = "NEUTRAL"
-        extra_reason = ""
-        
-        # Long-term trend bias
-        trend_bias = "BULLISH" if close > sma200_long else "BEARISH"
-        
-        # Strategy: Indicators + FVG Confirmation
-        last_fvg = fvgs[-1] if fvgs else None
-        
-        # Initialize extra reason parts
         extra_reason_parts = []
+        score_components = 0 # Track how many different strategies align
         
-        # ADVANCED SMC & CANDLESTICK INTEGRATION
-        candlestick_boost = 0.0
+        # 3. ADVANCED DETECTION (SMC & CANDLESTICK)
         try:
             from advanced_smc_detector import AdvancedSMCDector
             smc = AdvancedSMCDector(self.df)
             patterns = smc.detect_candlestick_patterns()
             sweep = smc.detect_liquidity_sweeps()
             ob = smc.detect_return_zones()
+            fvgs = self.detect_fvg()
+            last_fvg = fvgs[-1] if fvgs else None
             
-            for pat in patterns:
-                extra_reason_parts.append(f"Vela: {pat['desc']}")
-                
-                # Directional boosts based on pattern
-                if signal == "BUY" and pat['pattern'] in ['BULLISH_ENGULFING', 'HAMMER']:
-                    candlestick_boost += 0.05
-                elif signal == "SELL" and pat['pattern'] in ['BEARISH_ENGULFING', 'SHOOTING_STAR']:
-                    candlestick_boost += 0.05
+            # --- Candlestick Patterns ---
+            if patterns:
+                for pat in patterns:
+                    if (pat['pattern'] in ['BULLISH_ENGULFING', 'HAMMER'] and trend_bias == "BULLISH") or \
+                       (pat['pattern'] in ['BEARISH_ENGULFING', 'SHOOTING_STAR'] and trend_bias == "BEARISH"):
+                        confidence += 0.15
+                        score_components += 1
+                        extra_reason_parts.append(f"Vela: {pat['desc']}")
             
-            # Liquidity Sweeps
+            # --- Liquidity Sweeps (Strong Reversal Signal) ---
             if sweep:
-                extra_reason_parts.append(f"Manipulación: {sweep['desc']}")
-                if signal == "BUY" and sweep['type'] == 'BULLISH_SWEEP':
-                    candlestick_boost += 0.08  # High confidence trap
-                elif signal == "SELL" and sweep['type'] == 'BEARISH_SWEEP':
-                    candlestick_boost += 0.08
+                if sweep['type'] == 'BULLISH_SWEEP' and trend_bias == "BULLISH":
+                    confidence += 0.20
+                    score_components += 1
+                    potential_signal = "BULLISH" # Reversal can override neutral momentum
+                    extra_reason_parts.append(f"Caza de Liquidez Alcista")
+                elif sweep['type'] == 'BEARISH_SWEEP' and trend_bias == "BEARISH":
+                    confidence += 0.20
+                    score_components += 1
+                    potential_signal = "BEARISH"
+                    extra_reason_parts.append(f"Caza de Liquidez Bajista")
                     
-            # Return Zones (Order Blocks)
+            # --- Order Blocks & FVG (Institutional) ---
             if ob:
-                # If current price is inside the OB
-                if ob['type'] == 'BULLISH_OB' and ob['bottom'] <= close <= ob['top'] and signal == 'BUY':
-                    candlestick_boost += 0.05
-                    extra_reason_parts.append("OB alcista mitigado")
-                elif ob['type'] == 'BEARISH_OB' and ob['bottom'] <= close <= ob['top'] and signal == 'SELL':
-                    candlestick_boost += 0.05
-                    extra_reason_parts.append("OB bajista mitigado")
+                if ob['type'] == 'BULLISH_OB' and ob['bottom'] <= close <= (ob['top'] + atr*0.2):
+                    confidence += 0.15
+                    score_components += 1
+                    extra_reason_parts.append("Zona de Oferta/Demanda (OB)")
+                elif ob['type'] == 'BEARISH_OB' and (ob['bottom'] - atr*0.2) <= close <= ob['top']:
+                    confidence += 0.15
+                    score_components += 1
+                    extra_reason_parts.append("Zona de Oferta/Demanda (OB)")
             
-            # BOLLINGER BANDS CONFIRMATION
-            bb_upper, bb_lower = self.calculate_bollinger_bands()
-            curr_upper = bb_upper.iloc[-1]
-            curr_lower = bb_lower.iloc[-1]
-            
-            if signal == "BUY" and close <= curr_lower:
-                candlestick_boost += 0.07 # Price at extreme lower band
-                extra_reason_parts.append("BB Inferior (Sobreventa)")
-            elif signal == "SELL" and close >= curr_upper:
-                candlestick_boost += 0.07 # Price at extreme upper band
-                extra_reason_parts.append("BB Superior (Sobrecompra)")
+            if last_fvg:
+                if last_fvg['type'] == 'BULLISH' and close > last_fvg['bottom']:
+                    confidence += 0.10
+                    score_components += 1
+                    extra_reason_parts.append("Imbalance FVG Alcista")
+                elif last_fvg['type'] == 'BEARISH' and close < last_fvg['top']:
+                    confidence += 0.10
+                    score_components += 1
+                    extra_reason_parts.append("Imbalance FVG Bajista")
 
-            # FIBONACCI RETRACEMENT (Last Swing)
+            # --- Confluences (BB & Fib) ---
+            bb_upper, bb_lower = self.calculate_bollinger_bands()
+            if close <= bb_lower.iloc[-1]:
+                confidence += 0.10
+                extra_reason_parts.append("Sobrevendido (BB)")
+            elif close >= bb_upper.iloc[-1]:
+                confidence += 0.10
+                extra_reason_parts.append("Sobrecomprado (BB)")
+
+            # Fibonacci 61.8% (Golden Zone) of recent move
             swing_high = self.df['High'].tail(50).max()
             swing_low = self.df['Low'].tail(50).min()
-            fib = self.calculate_fibonacci(swing_high, swing_low)
-            
-            # Check for proximity to Golden Zone (61.8%) or 50%
-            if signal == "BUY" and abs(close - fib['61.8']) / close < 0.001:
-                candlestick_boost += 0.05
-                extra_reason_parts.append("Fibonacci 61.8% (Golden Zone)")
-            elif signal == "SELL" and abs(close - fib['61.8']) / close < 0.001:
-                candlestick_boost += 0.05
-                extra_reason_parts.append("Fibonacci 61.8% (Golden Zone)")
+            fib_levels = self.calculate_fibonacci(swing_high, swing_low)
+            if abs(close - fib_levels['61.8']) / close < 0.002: # 0.2% tolerance
+                confidence += 0.10
+                extra_reason_parts.append("Nivel Fibonacci 61.8%")
 
-            # EMA/SMA ALIGNMENT (Momentum)
-            ema9 = self.calculate_ema(9).iloc[-1]
-            sma20 = self.calculate_sma(20).iloc[-1]
-            if signal == "BUY" and close > ema9 > sma20:
-                candlestick_boost += 0.04 # Momentum bullish
-                extra_reason_parts.append("Momentum Aligned (EMA > SMA)")
-            elif signal == "SELL" and close < ema9 < sma20:
-                candlestick_boost += 0.04 # Momentum bearish
-                extra_reason_parts.append("Momentum Aligned (EMA < SMA)")
-                    
         except Exception as e:
-            pass # Failsafe
+            print(f"⚠️ Analysis Engine Sub-module Error: {e}")
 
-        if signal == "BUY":
-            confidence = 0.85
-            signal = "BUY"
-            if trend_bias == "BULLISH":
-                confidence += 0.05 # Trend confluence
-                extra_reason_parts.append("12-Month Bullish Trend Confluence")
-            
-            if last_fvg and last_fvg['type'] == 'BULLISH':
-                confidence += 0.05  # Higher weight for ICT
-                extra_reason_parts.append("FVG Institutional")
-                
-            confidence += candlestick_boost
-            
-        elif signal == "SELL":
-            confidence = 0.85
-            signal = "SELL"
-            if trend_bias == "BEARISH":
-                confidence += 0.05 # Trend confluence
-                extra_reason_parts.append("12-Month Bearish Trend Confluence")
-                
-            if last_fvg and last_fvg['type'] == 'BEARISH':
-                confidence += 0.05 # Higher weight for ICT
-                extra_reason_parts.append("FVG Institutional")
-                
-            confidence += candlestick_boost
-
-        extra_reason = " + ".join(extra_reason_parts)
-        # APPLY SELF-LEARNING (Dynamic Weighting)
+        # 4. BACKTEST VALIDATION (New Elite Logic)
+        backtest_success = 0.0
         try:
-            from learning_brain import LearningBrain
-            brain = LearningBrain()
-            learned_multiplier = brain.get_experience_multiplier("GENERAL") # For now global, can be per asset
-            confidence *= learned_multiplier
-            if learned_multiplier > 1.0:
-                extra_reason += f" [IA EXPERTA: +{int((learned_multiplier-1)*100)}%]"
-            elif learned_multiplier < 1.0:
-                extra_reason += f" [IA CAUTELOSA: -{int((1-learned_multiplier)*100)}%]"
+            from backtester import Backtester
+            bt = Backtester(self.df)
+            # Validate how many times similar setups worked recently
+            bt_results = bt.run_quick_test(None, periods=100)
+            backtest_success = bt_results.get("win_rate", 0)
+            if backtest_success > 90:
+                confidence += 0.05
+                extra_reason_parts.append(f"Éxito Histórico Probado: {backtest_success}%")
+            elif backtest_success < 75:
+                confidence *= 0.90 # Penalize unstable assets
         except:
             pass
 
-        confidence = min(0.99, confidence) # Cap at 99%
+        # 5. FINAL CALCULATION
+        # Base confidence for trend alignment
+        if potential_signal != "NEUTRAL":
+            confidence += 0.40 # Base weight for trend + momentum
+        
+        # SELF-LEARNING ADJUSTMENT
+        # Determine current primary strategy for weighting
+        if sweep:
+            strategy_type = "REVERSAL_SWEEP"
+        elif ob or last_fvg:
+            strategy_type = "INSTITUTIONAL_SMC"
+        elif score_components > 0:
+            strategy_type = "INDICATOR_CONFLUENCE"
+        else:
+            strategy_type = "TREND_FOLLOWING"
 
-        # Fix SL/TP calculation (Avoid 0.0)
-        if signal == "BUY":
-            sl = float(f"{(close - (atr * 1.5)):.5f}")
-            tp = float(f"{(close + (atr * 3)):.5f}")
-        elif signal == "SELL":
-            sl = float(f"{(close + (atr * 1.5)):.5f}")
-            tp = float(f"{(close - (atr * 3)):.5f}")
+        try:
+            from learning_brain import LearningBrain
+            brain = LearningBrain()
+            # Dynamic multiplier based on asset and strategy
+            learned_multiplier = brain.get_experience_multiplier("GENERAL", strategy_type)
+            confidence *= learned_multiplier
+            if learned_multiplier > 1.05:
+                extra_reason_parts.append(f"IA Optimizada ({strategy_type}: +{int((learned_multiplier-1)*100)}%)")
+        except:
+            pass
+
+        # Final Signal Decision
+        final_signal = "NEUTRAL"
+        if confidence >= 0.88 and potential_signal != "NEUTRAL":
+            # Require at least 2 confirming score components for high confidence
+            if score_components >= 2 or backtest_success > 92:
+                final_signal = "BUY" if potential_signal == "BULLISH" else "SELL"
+            else:
+                # High confidence but low components = caution
+                confidence *= 0.95
+                if confidence >= 0.92:
+                     final_signal = "BUY" if potential_signal == "BULLISH" else "SELL"
+        
+        # 6. ELITE SCORE (For Top 5 Selection)
+        # Combination of Confidence + Backtest Success + Volatility Stability
+        # Volatility index (lower is better for stability)
+        volatility = atr / close if close > 0 else 1
+        stability_score = max(0, 100 - (volatility * 10000))
+        
+        elite_score = (confidence * 50) + (backtest_success * 0.3) + (stability_score * 0.2) if final_signal != "NEUTRAL" else 0
+        
+        # 7. STRUCTURAL SL/TP
+        if final_signal == "BUY":
+            # SL below recent low or OB bottom, whichever is more structural
+            swing_low_local = self.df['Low'].tail(20).min()
+            sl = min(swing_low_local, close - (atr * 2))
+            tp = close + (abs(close - sl) * 2.5) # Risk-Reward 1:2.5
+        elif final_signal == "SELL":
+            swing_high_local = self.df['High'].tail(20).max()
+            sl = max(swing_high_local, close + (atr * 2))
+            tp = close - (abs(sl - close) * 2.5)
         else:
             sl, tp = 0.0, 0.0
 
-        # Calculate Precise Timing
-        now = datetime.now()
-        entry_time = now.strftime("%H:%M:%S")
-        expiry_time = (now + timedelta(minutes=15)).strftime("%H:%M:%S")
+        extra_reason = " | ".join(extra_reason_parts) if extra_reason_parts else "Analizando mercado..."
 
         return {
-            "signal": signal,
-            "confidence": float(f"{(confidence * 100):.2f}"), # Return as percentage 0-100
-            "sl": float(sl),
-            "tp": float(tp),
-            "timeframe": "M15 (Binarias)",
-            "entry_time": entry_time,
-            "expiry_time": expiry_time,
+            "signal": final_signal,
+            "confidence": float(f"{min(99.9, confidence * 100):.2f}"),
+            "elite_score": round(elite_score, 2),
+            "backtest_winrate": backtest_success,
+            "sl": float(f"{sl:.5f}"),
+            "tp": float(f"{tp:.5f}"),
+            "timeframe": "M15 Confluencia",
             "info": extra_reason,
-            "timezone": "UTC-5 (Bogota/CO)"
+            "trend": trend_bias,
+            "strategy": strategy_type,
+            "status": "ACTIVE" if final_signal != "NEUTRAL" else "WAITING"
         }
 
 if __name__ == "__main__":

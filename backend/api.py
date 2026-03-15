@@ -85,6 +85,7 @@ class TradeRequest(BaseModel):
     amount: float = 10.0
     sl: float = 0.0
     tp: float = 0.0
+    strategy: str = "CORE_V2"
 
 @app.post("/auto-toggle")
 async def toggle_auto(request: AutoToggle):
@@ -117,36 +118,47 @@ async def get_daily_analysis():
     
     for asset in all_symbols:
         # Fetch data for analysis
-        df = bridge.get_historical_data(asset, count=1000) # Use 1000 for faster scanning
+        df = bridge.get_historical_data(asset, count=1000) 
         
         if df is not None:
             engine = AnalysisEngine(df)
             signal_data = engine.get_signals()
             
-            # Only include if confidence is decent, or if it's one of the user's favorites
+            # Use high threshold for consideration
             if signal_data['confidence'] > 85:
                 results[asset] = {**signal_data, "status": "ACTIVE", "balance": real_balance}
-                
-                # AUTO-TRADING EXECUTION for high confidence winners
-                print(f"🤖 [EVAL] {asset}: Confianza {signal_data['confidence']}% | Auto: {AUTO_TRADING_ENABLED}")
-                
-                if signal_data['confidence'] >= 92 and AUTO_TRADING_ENABLED:
-                    if is_open:
-                        print(f"🚀 [AUTO-WINNER] Iniciando trade en {asset} con ${CURRENT_COMPOUND_AMOUNT}")
-                        await execute_trade(TradeRequest(
-                            symbol=asset, 
-                            type=signal_data['signal'], 
-                            volume=0.01, 
-                            amount=CURRENT_COMPOUND_AMOUNT,
-                            sl=signal_data['sl'],
-                            tp=signal_data['tp']
-                        ))
-                    else:
-                        print(f"⏳ [SESSION-WAIT] Confianza 92%+ en {asset} pero fuera de horario NYSE: {session_msg}")
-                elif signal_data['confidence'] >= 92:
-                    print(f"⚠️ [SKIP] Confianza 92%+ encontrada en {asset} pero Mando Automático está APAGADO.")
+
+    # ELITE SELECTION: Sort all results by Elite Score and keep only top 5
+    elite_results = sorted(
+        [{"symbol": k, **v} for k, v in results.items() if v.get('elite_score', 0) > 0],
+        key=lambda x: x['elite_score'],
+        reverse=True
+    )[:5]
+    
+    # Filter 'results' to only show these elite ones if available
+    if elite_results:
+        results = {item['symbol']: {k: v for k, v in item.items() if k != 'symbol'} for item in elite_results}
+
+    # AUTO-TRADING EXECUTION for the top winners
+    for asset, signal_data in results.items():
+        if signal_data['confidence'] >= 92 and AUTO_TRADING_ENABLED:
+            if is_open:
+                print(f"🚀 [AUTO-ELITE] {asset}: {signal_data['strategy']} (Elite: {signal_data['elite_score']} | Win: {signal_data['backtest_winrate']}%)")
+                await execute_trade(TradeRequest(
+                    symbol=asset, 
+                    type=signal_data['signal'], 
+                    volume=0.01, 
+                    amount=CURRENT_COMPOUND_AMOUNT,
+                    sl=signal_data['sl'],
+                    tp=signal_data['tp'],
+                    strategy=signal_data['strategy']
+                ))
+            else:
+                print(f"⏳ [SESSION-WAIT] {asset} ({signal_data['confidence']}%) - {session_msg}")
+        elif signal_data['confidence'] >= 92:
+            print(f"⚠️ [SKIP] Confianza 92%+ en {asset} pero Mando Automático está APAGADO.")
             
-    # If no winners found, ensure at least the majors are visible
+    # If no results found, ensure majors are visible
     if not results:
         for asset in ["EURUSD", "XAUUSD"]:
             df = bridge.get_historical_data(asset, count=1000)
@@ -154,17 +166,13 @@ async def get_daily_analysis():
                 engine = AnalysisEngine(df)
                 results[asset] = {**engine.get_signals(), "status": "STABLE", "balance": real_balance}
 
-    # Get trade history
     history = bridge.get_history()
 
     response_data = {
         "results": results,
         "last_ticket": LAST_TICKET,
         "history": history,
-        "market_session": {
-            "is_open": is_open,
-            "message": session_msg
-        },
+        "market_session": {"is_open": is_open, "message": session_msg},
         "auto_trading": {
             "enabled": AUTO_TRADING_ENABLED,
             "base_amount": INVESTMENT_AMOUNT,
@@ -172,7 +180,6 @@ async def get_daily_analysis():
             "last_outcome": LAST_OUTCOME
         }
     }
-    print(f"DEBUG: Response keys are {list(response_data.keys())}")
     return response_data
 
 @app.post("/trade")
@@ -181,57 +188,65 @@ async def execute_trade(request: TradeRequest):
     real_balance = bridge.get_balance()
     
     if real_balance < request.amount:
-        return {"status": "ERROR", "message": f"Fondos insuficientes en cuenta real. Saldo: ${real_balance}"}
+        return {"status": "ERROR", "message": f"Fondos insuficientes. Saldo: ${real_balance}"}
 
     if not bridge.connect():
-        raise HTTPException(status_code=500, detail="No se pudo conectar a MetaTrader 5")
+        raise HTTPException(status_code=500, detail="Error de conexión MT5")
     
     # EXECUTE TRADE IN MT5
-    ticket, new_balance, last_profit = bridge.execute_trade(
+    trade_result = bridge.execute_trade(
         request.symbol, 
         request.type, 
         request.volume,
         sl=request.sl,
         tp=request.tp
     )
+    
+    if trade_result.get("status") == "error":
+        return {"status": "ERROR", "message": trade_result.get("message")}
+
+    ticket = trade_result.get("order_id", "N/A")
     new_balance = bridge.get_balance()
     global LAST_TICKET
     LAST_TICKET = str(ticket)
     
-    # COMPOUNDING LOGIC (Synced with REAL MT5 History)
-    # We wait a bit or use the last closed deal profit
-    history = bridge.get_history(count=1)
-    last_profit = 0.0
-    if history:
-        last_profit = history[0]['profit']
+    # Initialize outcome tracking
+    LAST_OUTCOME = "WAITING_RESULT"
     
-    global CURRENT_COMPOUND_AMOUNT, LAST_OUTCOME
-    if last_profit > 0:
-        CURRENT_COMPOUND_AMOUNT += last_profit
-        LAST_OUTCOME = "WIN"
-    elif last_profit < 0:
-        CURRENT_COMPOUND_AMOUNT = INVESTMENT_AMOUNT
-        LAST_OUTCOME = "LOSS"
-    else:
-        # If no result yet, keep current amount or assume break even
-        LAST_OUTCOME = "WAITING_RESULT"
+    # LOG IN BRAIN (Initial context)
+    if ticket != "N/A":
+        # Capture basic context for the brain
+        brain.log_trade_start(
+            str(ticket), 
+            request.symbol, 
+            request.type, 
+            0.0, # Price will be updated later or extracted from history
+            {"strategy": request.strategy}
+        )
 
-    # UPDATE BRAIN WITH OUTCOME
-    if ticket != "N/A" and LAST_OUTCOME in ["WIN", "LOSS"]:
-        brain.update_trade_outcome(ticket, LAST_OUTCOME)
+    # Note: Outcome is usually updated in the next scan via Bridge.get_history
+    # But for instant feedback we can check last closed deal
+    history = bridge.get_history(count=1)
+    if history and str(history[0].get('ticket')) == str(ticket):
+        last_profit = history[0]['profit']
+        if last_profit > 0:
+            CURRENT_COMPOUND_AMOUNT += last_profit
+            LAST_OUTCOME = "WIN"
+        elif last_profit < 0:
+            CURRENT_COMPOUND_AMOUNT = INVESTMENT_AMOUNT
+            LAST_OUTCOME = "LOSS"
+        brain.update_trade_outcome(str(ticket), LAST_OUTCOME)
 
-    print(f"\n🚀 [MT5 REAL EXECUTION] TICKET: {ticket}")
-    print(f"🏦 Activo: {request.symbol} | Volumen: {request.volume} | Tipo: {request.type}")
-    print(f"🏦 Saldo Actualizado: ${new_balance:.2f}")
-    print(f"📈 Próxima Inversión (Compounding): ${CURRENT_COMPOUND_AMOUNT:.2f} ({LAST_OUTCOME})\n")
+    print(f"🚀 [MT5 EXEC] TICKET: {ticket} | {request.symbol} | {request.strategy}")
     
     return {
-        **result, 
+        **trade_result, 
         "balance": new_balance, 
         "outcome": LAST_OUTCOME, 
         "next_amount": CURRENT_COMPOUND_AMOUNT,
         "ticket": ticket
     }
+
 
 if __name__ == "__main__":
     print("🛰️ Intentando conectar con MetaTrader 5...")

@@ -4,5 +4,6 @@ pandas
 numpy
 python-dotenv
 httpx
-# MetaTrader5 (only for Windows/MT5)
-# mt5linux (for Linux)
+pytz
+requests
+MetaTrader5
