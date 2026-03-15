@@ -17,9 +17,11 @@ news = NewsFeedService()
 
 import json
 import pytz
+import os
 from datetime import datetime, time as dt_time
 
-CONFIG_FILE = "backend/config.json"
+# Always resolve config.json relative to THIS file (api.py) - fixes path bug when running from any directory
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 def is_nyse_session():
     """
