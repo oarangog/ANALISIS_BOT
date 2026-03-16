@@ -50,64 +50,63 @@ class MT4Bridge:
 
     def _resolve_symbol(self, symbol):
         """
-        Detects the real symbol name in MT5 and ensures it's active in Market Watch
-        Handles common aliases (NAS100 -> US100, SPX500 -> US500, XAUUSD -> GOLD)
+        Detects the real symbol name in MT5 and ensures it's active in Market Watch.
+        Handles common aliases (NAS100 -> US100, SPX500 -> US500, XAUUSD -> GOLD).
+        PRIORITY: Picks symbols that are actually TRADABLE (trade_mode != disabled).
         """
         if not self.connected and not self.connect():
             return symbol
             
-        # Try exact match first
+        def is_tradable(sym_info):
+            if sym_info is None: return False
+            # trade_mode: 4=Full, 3=Limited (can open), 2=CloseOnly, 1=Disabled, 0=None
+            return sym_info.trade_mode in [mt5.SYMBOL_TRADE_MODE_FULL, mt5.SYMBOL_TRADE_MODE_LONGONLY, mt5.SYMBOL_TRADE_MODE_SHORTONLY]
+
+        # 1. Try exact match first - BUT verify if it's tradable
         sym = mt5.symbol_info(symbol)
-        if sym:
+        if sym and is_tradable(sym):
             if not sym.visible:
                 mt5.symbol_select(sym.name, True)
             return sym.name
             
-        # Common Aliases (Broker specific naming)
+        # 2. Check Common Aliases
         aliases = {
-            "NAS100": "US100",
-            "SPX500": "US500",
-            "XAUUSD": "GOLD",
-            "XAGUSD": "SILVER",
-            "US30": "US30",
-            "GER40": "GER40"
+            "NAS100": "US100", "SPX500": "US500", "XAUUSD": "GOLD",
+            "XAGUSD": "SILVER", "US30": "US30", "GER40": "GER40"
         }
         
         search_names = [symbol]
         if symbol in aliases:
             search_names.append(aliases[symbol])
             
-        # Common Forex/CFD suffixes (Priority order)
-        suffixes = ["Cash#", "#", "Cash", "+", ".m", ".i", "_i", ".st", ".pro", ""]
+        # 3. Smart Search using Suffixes and Groups
+        suffixes = ["#", "Cash#", "Cash", "+", ".m", ".i", "_i", ".st", ".pro", ""]
         
         for name in search_names:
+            # First try direct suffix combinations
             for suffix in suffixes:
                 candidate = name + suffix
                 sym_s = mt5.symbol_info(candidate)
-                if sym_s:
+                if sym_s and is_tradable(sym_s):
                     if not sym_s.visible:
                         mt5.symbol_select(sym_s.name, True)
                     return sym_s.name
-                
-        # Search for any symbol containing the base name or alias
-        # Priority: Symbols ending in Cash# or #
-        for name in search_names:
+            
+            # Then try broad group search
             found = mt5.symbols_get(group=f"*{name}*")
             if found:
-                # Filter for trading-like symbols first
-                trading_symbols = [s.name for s in found if s.name.endswith("#") or "Cash" in s.name]
-                if trading_symbols:
-                    # Pick the shortest or most 'cash-like'
-                    res = sorted(trading_symbols, key=len)[0]
-                else:
-                    res = found[0].name
+                # Filter for tradable ones first
+                tradable_matches = [s for s in found if is_tradable(s)]
+                if tradable_matches:
+                    # Prefer ones ending in # or containing 'Cash' (typical for indices/commodities)
+                    prioritized = sorted(tradable_matches, key=lambda x: (not x.name.endswith("#"), "Cash" not in x.name, len(x.name)))
+                    res = prioritized[0].name
+                    if not mt5.symbol_info(res).visible:
+                        mt5.symbol_select(res, True)
+                    print(f"🔍 Symbol resolved (Smart Tradable {name}): {symbol} -> {res}")
+                    return res
                     
-                if not mt5.symbol_info(res).visible:
-                    mt5.symbol_select(res, True)
-                print(f"🔍 Symbol resolved (Smart Pattern {name}): {symbol} -> {res}")
-                return res
-            
-        print(f"⚠️ Symbol NOT resolved: {symbol}. Using as is.")
+        print(f"⚠️ Symbol NOT resolved to tradable: {symbol}. Return original attempt.")
         return symbol
 
     def get_historical_data(self, symbol, timeframe=mt5.TIMEFRAME_M15, count=1000):
@@ -173,17 +172,20 @@ class MT4Bridge:
             return []
             
         history = []
-        # Get elements one by one if slicing causes issues
-        count_to_fetch = min(len(deals), count)
-        for i in range(len(deals) - count_to_fetch, len(deals)):
+        for i in range(len(deals) - 1, -1, -1): # Walk backwards
             d = deals[i]
-            history.append({
-                "ticket": d.ticket,
-                "symbol": d.symbol,
-                "profit": d.profit,
-                "type": "BUY" if d.type == mt5.ORDER_TYPE_BUY else "SELL",
-                "time": datetime.fromtimestamp(d.time).strftime("%H:%M:%S")
-            })
+            # Filters: Only show "Out" deals (Exits) or deals with significant profit change
+            # d.entry: 0=In, 1=Out, 2=In/Out
+            if d.entry in [1, 2] or abs(d.profit) > 0.01:
+                history.append({
+                    "ticket": d.ticket,
+                    "symbol": d.symbol,
+                    "profit": d.profit,
+                    "type": "BUY" if d.type == mt5.ORDER_TYPE_BUY else "SELL",
+                    "time": datetime.fromtimestamp(d.time).strftime("%H:%M:%S")
+                })
+            if len(history) >= count:
+                break
         return history
 
     def execute_trade(self, symbol, type, volume, price=None, sl=0.0, tp=0.0):

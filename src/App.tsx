@@ -46,9 +46,9 @@ function App() {
     }
   };
 
-  useEffect(() => {
+    useEffect(() => {
     fetchAnalysis()
-    const interval = setInterval(fetchAnalysis, 10000) // Update every 10s
+    const interval = setInterval(fetchAnalysis, 3000) // Updated to 3s for real-time scanner
     return () => clearInterval(interval)
   }, [])
 
@@ -93,12 +93,83 @@ function App() {
           </div>
           <div className="balance-display">
             <span>Saldo real XM: </span>
-            <span className="neon-text-green">{marketData.results?.['EURUSD'] ? `$${marketData.results['EURUSD'].balance.toFixed(2)}` : 'Cargando...'}</span>
+            <span className="neon-text-green">${marketData.real_balance ? marketData.real_balance.toFixed(2) : 'Cargando...'}</span>
           </div>
         </div>
       </header>
 
       <main>
+        {/* NEW: DYNAMIC SCANNING TICKER */}
+        <div className="scanning-ticker-wrapper glass-card">
+            <span className="pulse-icon">📡</span> 
+            {marketData.currently_scanning === "Fin del ciclo" ? 
+                <span className="ticker-text neon-text-green">Ciclo completado. Analizando oportunidades...</span> : 
+                <span className="ticker-text neon-text-cyan">Analizando ahora: <b className="scanning-symbol">{marketData.currently_scanning || "Iniciando..."}</b></span>
+            }
+        </div>
+
+        {/* NEW: SCANNER MATRIX GRID */}
+        <section className="scanner-matrix-container glass-card">
+            <h2 className="neon-text-cyan">📊 Matriz de Escaneo Institucional (Fuerza Relativa)</h2>
+            <div className="matrix-grid">
+                {marketData.all_scores && Object.entries(marketData.all_scores)
+                    .sort(([, a]: any, [, b]: any) => b.score - a.score)
+                    .map(([symbol, data]: [string, any]) => (
+                    <div key={symbol} className={`matrix-card ${data.score >= 90 ? 'matrix-highlight' : ''}`}>
+                        <div className="matrix-symbol">{symbol}</div>
+                        <div className="matrix-score-info">
+                            <span className="score-val">{data.score}%</span>
+                            <span className={`trend-val ${data.trend?.toLowerCase()}`}>{data.trend}</span>
+                        </div>
+                        <div className="score-bar-bg">
+                            <div className="score-bar-fill" style={{ width: `${data.score}%` }}></div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </section>
+
+        {/* NEW: LIVE POSITIONS MONITOR */}
+        <section className="live-monitor glass-card">
+          <h2 className="neon-text-cyan">🦾 Monitor de Posiciones En Vivo (MT5)</h2>
+          <div className="monitor-table-wrapper">
+            <table className="monitor-table">
+              <thead>
+                <tr>
+                  <th>Ticket</th>
+                  <th>Activo</th>
+                  <th>Tipo</th>
+                  <th>Entrada</th>
+                  <th>Actual</th>
+                  <th>SL / TP</th>
+                  <th>Profit</th>
+                </tr>
+              </thead>
+              <tbody>
+                {marketData.open_positions?.map((pos: any) => (
+                  <tr key={pos.ticket}>
+                    <td>{pos.ticket}</td>
+                    <td className="neon-text-cyan">{pos.symbol}</td>
+                    <td className={pos.type === 'BUY' ? 'neon-text-cyan' : 'neon-text-magenta'}>{pos.type}</td>
+                    <td>{pos.price_open.toFixed(5)}</td>
+                    <td>{pos.price_current.toFixed(5)}</td>
+                    <td className="text-dim">
+                      <span className="neon-text-red">{pos.sl.toFixed(5)}</span> / 
+                      <span className="neon-text-green">{pos.tp.toFixed(5)}</span>
+                    </td>
+                    <td className={pos.profit >= 0 ? 'neon-text-green' : 'neon-text-red'}>
+                      ${pos.profit.toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+                {(!marketData.open_positions || marketData.open_positions.length === 0) && (
+                  <tr><td colSpan={7} className="text-dim">No hay operaciones abiertas en este momento.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <div className="daily-status glass-card">
           <h2>Market Sentiment - {lastUpdate}</h2>
           <div className="sentiment-indicators">
@@ -112,9 +183,12 @@ function App() {
         ) : (
           <div className="grid-dashboard">
             {marketData.results && Object.keys(marketData.results).map((asset) => (
-              <div key={asset} className="glass-card asset-card">
+              <div key={asset} className={`glass-card asset-card ${marketData.elite_symbols?.includes(asset) ? 'elite-border' : ''}`}>
                 <div className="card-header">
-                  <h3 className="neon-text-cyan">{asset} {asset === 'EURUSD' && <span style={{ fontSize: '0.6rem', color: '#666', verticalAlign: 'middle', marginLeft: '5px' }}>(ACTIVO BASE)</span>}</h3>
+                  <h3 className="neon-text-cyan">
+                    {asset} 
+                    {marketData.elite_symbols?.includes(asset) && <span className="elite-badge">⭐ ELITE</span>}
+                    {asset === 'EURUSD' && <span style={{ fontSize: '0.6rem', color: '#666', verticalAlign: 'middle', marginLeft: '5px' }}>(BASE)</span>}</h3>
                   <span className={`status-pill ${marketData.results[asset].status.toLowerCase()}`}>
                     {marketData.results[asset].status}
                   </span>

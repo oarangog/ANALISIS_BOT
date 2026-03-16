@@ -1,5 +1,1 @@
-{
-    "auto_trading_enabled": true,
-    "investment_amount": 2.0,
-    "current_compound_amount": 2.0
-}
+{"auto_trading_enabled": true, "investment_amount": 2.0, "current_compound_amount": 2.0}

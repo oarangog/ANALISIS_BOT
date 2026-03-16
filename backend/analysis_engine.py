@@ -10,7 +10,7 @@ class AnalysisEngine:
         data: pandas DataFrame with 'Close', 'High', 'Low' columns
         """
         self.df = data
-        self.confidence_threshold = 0.85 # User requested high confidence
+        self.confidence_threshold = 0.90 # User requested 90% confidence
 
     def calculate_sma(self, period=20):
         return self.df['Close'].rolling(window=period).mean()
@@ -222,14 +222,13 @@ class AnalysisEngine:
 
         # Final Signal Decision
         final_signal = "NEUTRAL"
-        if confidence >= 0.88 and potential_signal != "NEUTRAL":
-            # Require at least 2 confirming score components for high confidence
-            if score_components >= 2 or backtest_success > 92:
+        if confidence >= 0.85 and potential_signal != "NEUTRAL":
+            # Require at least 2 confirming score components or high backtest success
+            if score_components >= 2 or backtest_success > 90:
                 final_signal = "BUY" if potential_signal == "BULLISH" else "SELL"
             else:
-                # High confidence but low components = caution
-                confidence *= 0.95
-                if confidence >= 0.92:
+                # Moderate confidence - check if it hits the 90% floor
+                if confidence >= 0.90:
                      final_signal = "BUY" if potential_signal == "BULLISH" else "SELL"
         
         # 6. ELITE SCORE (For Top 5 Selection)

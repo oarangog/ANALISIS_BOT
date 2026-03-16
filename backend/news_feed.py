@@ -9,12 +9,12 @@ FF_CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 # Currencies we care about (matching our asset list)
 RELEVANT_CURRENCIES = {"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "XAU"}
 
-# Only HIGH impact events block trading
-HIGH_IMPACT = {"High", "high", "Holiday"}
+# IMPACT LEVELS (Aggressive Filter includes Medium)
+IMPACT_LEVELS = {"High", "high", "Medium", "medium", "Holiday"}
 
-# Minutes to block before and after a high-impact event
-BLOCK_BEFORE_MINUTES = 30
-BLOCK_AFTER_MINUTES  = 30
+# Minutes to block before and after a high-impact event (Aggressive: 60 min)
+BLOCK_BEFORE_MINUTES = 60
+BLOCK_AFTER_MINUTES  = 60
 
 class NewsFeedService:
     def __init__(self):
@@ -37,10 +37,10 @@ class NewsFeedService:
         now = datetime.now()
         if self._cache_time is None or (now - self._cache_time).seconds > self._cache_ttl_minutes * 60 or force_refresh:
             raw = self._fetch_events()
-            # Filter for HIGH impact only and relevant currencies
+            # Filter for IMPACT and relevant currencies
             self._cache = [
                 e for e in raw
-                if e.get("impact") in HIGH_IMPACT and e.get("currency") in RELEVANT_CURRENCIES
+                if e.get("impact") in IMPACT_LEVELS and e.get("currency") in RELEVANT_CURRENCIES
             ]
             self._cache_time = now
             print(f"📰 [NEWS] Calendar refreshed: {len(self._cache)} high-impact events this week.")
