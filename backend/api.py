@@ -195,33 +195,47 @@ async def background_scanning_loop():
             GLOBAL_CACHE["is_open"] = is_open
             GLOBAL_CACHE["session_msg"] = session_msg
             
-            # 3. Dynamic Scanning
+            # 3. Dynamic Scanning (MTF Expansion)
             all_symbols = bridge.get_all_symbols()
             if not all_symbols:
                 all_symbols = ["EURUSD", "USDJPY", "AUDUSD", "XAUUSD"]
             
-            GLOBAL_CACHE["scan_count"] = len(all_symbols)
+            # Target Timeframes
+            target_tfs = {
+                "M5": mt5.TIMEFRAME_M5,
+                "M15": mt5.TIMEFRAME_M15,
+                "H1": mt5.TIMEFRAME_H1,
+                "H4": mt5.TIMEFRAME_H4,
+                "D1": mt5.TIMEFRAME_D1
+            }
+            
+            GLOBAL_CACHE["scan_count"] = len(all_symbols) * len(target_tfs)
             
             current_results = {}
             full_matrix = {}
             
             for asset in all_symbols:
-                GLOBAL_CACHE["currently_scanning"] = asset
-                df = bridge.get_historical_data(asset, count=1000)
-                if df is not None:
-                    engine = AnalysisEngine(df)
-                    signal_data = engine.get_signals()
+                for tf_label, tf_id in target_tfs.items():
+                    display_name = f"{asset} ({tf_label})"
+                    GLOBAL_CACHE["currently_scanning"] = display_name
                     
-                    # Store score for the matrix (always)
-                    full_matrix[asset] = {
-                        "score": signal_data['confidence'],
-                        "signal": signal_data['signal'],
-                        "trend": signal_data.get('trend', 'Neutral')
-                    }
-                    
-                    # Store results for dashboard signal cards (> 85%)
-                    if signal_data['confidence'] > 85:
-                        current_results[asset] = signal_data
+                    df = bridge.get_historical_data(asset, timeframe=tf_id, count=1000)
+                    if df is not None:
+                        engine = AnalysisEngine(df)
+                        signal_data = engine.get_signals()
+                        signal_data["timeframe"] = tf_label # Tag the TF
+                        
+                        # Store score for the matrix (always)
+                        full_matrix[display_name] = {
+                            "score": signal_data['confidence'],
+                            "signal": signal_data['signal'],
+                            "trend": signal_data.get('trend', 'Neutral'),
+                            "tf": tf_label
+                        }
+                        
+                        # Store results for dashboard signal cards (> 85%)
+                        if signal_data['confidence'] > 85:
+                            current_results[display_name] = signal_data
             
             GLOBAL_CACHE["results"] = current_results
             GLOBAL_CACHE["all_scores"] = full_matrix
@@ -235,7 +249,7 @@ async def background_scanning_loop():
             print("\n" + "="*40)
             print(f"📊 REPORT [ {datetime.now().strftime('%H:%M:%S')} ]")
             print(f"💰 Balance: ${GLOBAL_CACHE['real_balance']:.2f}")
-            print(f"📡 Escaneados: {len(all_symbols)} activos")
+            print(f"📡 Escaneos totales (MTF): {GLOBAL_CACHE['scan_count']}")
             print(f"🔥 Top Scores: {top_assets_str}")
             print("="*40 + "\n")
             

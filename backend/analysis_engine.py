@@ -263,7 +263,7 @@ class AnalysisEngine:
             "backtest_winrate": backtest_success,
             "sl": float(f"{sl:.5f}"),
             "tp": float(f"{tp:.5f}"),
-            "timeframe": "M15 Confluencia",
+            "timeframe": "Calculado",
             "info": extra_reason,
             "trend": trend_bias,
             "strategy": strategy_type,
